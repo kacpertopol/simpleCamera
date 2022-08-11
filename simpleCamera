@@ -1,0 +1,341 @@
+#!/usr/bin/env python
+
+import argparse
+import cv2
+import os
+import numpy
+from sklearn.cluster import MiniBatchKMeans , AffinityPropagation
+import matplotlib.pyplot as plt
+
+# TODO, move this to object
+BLUR_KERNEL_SIZE = 300
+BACKGROUND_THRESHOLD = 2.0
+CLUSTER_NUMBER = 16
+CLUSTER_LENGTH_THRESHOLD = 5
+FRAME_SAVE_DIRECTORY = None
+
+class SimpleCamera:
+    """
+    TODO
+    """
+    def __init__(
+            self , number , hres , vres , 
+            buffer_size = 10):
+        """
+        TODO
+        """
+        
+        self.__camera_number , self.__camera_hres , self.__camera_vres = number , hres , vres
+
+        # script directory
+        self.__script_path = os.path.dirname(os.path.realpath(__file__))
+
+        # image with help information
+        self.__infoImage = cv2.imread(os.path.join(self.__script_path , "info.png"))
+
+        # buffer size for frames and perspective matrices
+        self.__buffer_size = buffer_size
+
+        # perspective matrix buffer
+        self.__perspective_buff = []
+
+        # current perspective matrix
+        self.__current_perspective_matrix = None
+        
+        # frame buffer
+        self.__frame_buff = []
+
+        # current frame
+        self.__current_frame = None
+
+        # open cv capture web cam
+        self.__capture = cv2.VideoCapture(self.__camera_number)
+        self.__capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.__camera_hres)
+        self.__capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.__camera_vres)
+
+        # creating opencv window
+        cv2.namedWindow('SimpleCamera' , cv2.WINDOW_GUI_NORMAL | cv2.WINDOW_KEEPRATIO)
+
+        # aruco markers
+        self.__aruco_dict = cv2.aruco.Dictionary_get(cv2.aruco.DICT_4X4_250)
+        self.__parameters =  cv2.aruco.DetectorParameters_create()
+      
+        ## blur kernel
+        self.__blur_kernel = numpy.ones((BLUR_KERNEL_SIZE , BLUR_KERNEL_SIZE) , dtype = numpy.float32) 
+        self.__blur_kernel = self.__blur_kernel / numpy.sum(self.__blur_kernel.flatten())
+
+        # is initialized
+
+        self.__initialized = True
+
+    def getFrame(self , 
+            warp = True , 
+            pause = False , 
+            invert = False , 
+            average = True , 
+            denoise = False ,
+            background = 255.0):
+        """
+        TODO
+        """
+        ret , frame = None , None
+        if(not pause):
+            ret , frame = self.__capture.read()
+
+        if(ret):
+
+            # got image from webcam
+            
+            ## append to frame buffer
+
+            self.__frame_buff.append(frame.astype(numpy.float32))
+            if(len(self.__frame_buff) > self.__buffer_size):
+                self.__frame_buff.pop(0)
+
+            ## calculate average frame for smoothing
+
+            if(average):
+                self.__current_frame = numpy.zeros(frame.shape , numpy.float32)
+                for f in self.__frame_buff:
+                    self.__current_frame += f
+                self.__current_frame /= float(len(self.__frame_buff))
+            else:
+                self.__current_frame = self.__frame_buff[-1]
+
+            if(warp):
+
+                ## warping perspective
+
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                corners, ids, rejectedImgPoints = cv2.aruco.detectMarkers(
+                        gray, 
+                        self.__aruco_dict, 
+                        parameters=self.__parameters)
+                
+                pts = None
+                ok = True
+                if(len(corners) == 4):
+                    allids = [0 , 1 , 2 , 3]
+                    pts = [None , None , None , None]
+                    for i in range(4):
+                        if(ids[i][0] <= 3 and ids[i][0] >= 0):
+                            pts[ids[i][0]] = [
+                                    (int(corners[i][0][0][0]) , int(corners[i][0][0][1])) ,
+                                    (int(corners[i][0][1][0]) , int(corners[i][0][1][1])) ,
+                                    (int(corners[i][0][2][0]) , int(corners[i][0][2][1])) ,
+                                    (int(corners[i][0][3][0]) , int(corners[i][0][3][1]))
+                                    ];
+
+                    ok = ok and (not None in pts)
+                else:
+                    ok = False
+
+                if(ok):
+
+                    ### got 4 aruco markers
+
+                    #### calculating perspective matrix
+
+                    pointsglob = pts
+                    src = numpy.array([pointsglob[0][2] , pointsglob[1][3] , pointsglob[3][0] , pointsglob[2][1]] , numpy.float32)
+                    dst = numpy.array([[frame.shape[1] , frame.shape[0]] , [0.0 , frame.shape[0]] , [0.0 , 0.0] , [frame.shape[1] , 0.0]] , numpy.float32)
+                    m = cv2.getPerspectiveTransform(src , dst)
+
+                    #### adding perspective matrix to buffer
+
+                    self.__perspective_buff.append(m)
+                    if(len(self.__perspective_buff) > self.__buffer_size):
+                        self.__perspective_buff.pop(0)
+
+                    #### calculating average perspective matrix
+
+                    self.__current_perspective_matrix = numpy.zeros(m.shape , dtype = numpy.float32)
+                    for mm in self.__perspective_buff:
+                        self.__current_perspective_matrix += mm
+                    self.__current_perspective_matrix /= float(len(self.__perspective_buff))
+
+            if(invert):
+                self.__current_frame = 255 - self.__current_frame
+            if(warp and self.__current_perspective_matrix is not None):
+                self.__current_frame = cv2.warpPerspective(self.__current_frame , self.__current_perspective_matrix , (frame.shape[1] , frame.shape[0]) , flags=cv2.INTER_CUBIC)
+            if(denoise):
+                self.__current_frame = self.denoise(background_color = background)
+        cv2.imshow("SimpleCamera" , self.__current_frame.astype(numpy.uint8))
+
+    def save(self , background_color = 255.0):
+
+        # removing background
+
+        gray = cv2.cvtColor(self.__current_frame , cv2.COLOR_BGR2GRAY).astype(numpy.float32)
+        blured_gray = cv2.filter2D(gray , -1 , self.__blur_kernel)
+        gray_scaled = gray - blured_gray
+        stdv = numpy.sqrt(numpy.mean((gray_scaled * gray_scaled).flatten()))
+        
+        # forground pixels
+        
+        forgroundList = numpy.argwhere((numpy.abs(gray_scaled) > BACKGROUND_THRESHOLD * stdv))
+        forgroundX = self.__current_frame[forgroundList[: , 0] , forgroundList[: , 1] , :]
+
+        # finding clusters
+
+        km = MiniBatchKMeans(n_clusters = CLUSTER_NUMBER).fit(forgroundX)
+
+        # creating new image 
+        
+        svg = ['<?xml version="1.0"?>\n']
+        svg += ["<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"" + str(gray.shape[1]) + "\" height=\"" + str(gray.shape[0]) + 
+                "\"" + ">\n"]
+        svg += ['<rect width="100%" height="100%" fill="rgb(' + 
+                    str(int(background_color)) + "," + str(int(background_color)) + "," + str(int(background_color)) + 
+                ')"/>\n']
+
+        for c in range(CLUSTER_NUMBER):
+
+            ## finding contours
+
+            color = km.cluster_centers_[c]
+            iC = numpy.where(km.labels_ == c)[0] # [0 , 3 , 10 , 12 , ...] 
+            indexesC = forgroundList[iC]
+            bwC = numpy.zeros(gray.shape , dtype = numpy.uint8) 
+            bwC[indexesC[: , 0] , indexesC[: , 1]] = 255
+            contours, hierarchy  = cv2.findContours(bwC, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+            if(contours is not None):
+                for el in contours:
+                    if(el.shape[0] >= CLUSTER_LENGTH_THRESHOLD):
+                        svg += ["<polyline points=\""]
+                        for pt in range(el.shape[0]):
+                            xind , yind = el[pt][0][0] , el[pt][0][1] 
+                            if xind >= 0 and yind >=0 :
+                                svg += [str(xind) + "," + str(yind) + " "]
+                        svg += ["\" fill=\"rgb(" + 
+                                    str(int(color[2])) + "," + str(int(color[1])) + "," + str(int(color[0])) + 
+                                ")\" stroke-width=\"2\" stroke=\"rgb(" + 
+                                    str(int(color[2])) + "," + str(int(color[1])) + "," + str(int(color[0])) + 
+                                ")\"/>\n"]
+
+        svg += ["</svg>\n"]
+
+        # saving image
+
+        save_dir = FRAME_SAVE_DIRECTORY
+        maxSvg = 0
+        for f in os.listdir(save_dir):
+            if(f[-4:] == ".svg" and f[:-4].isdigit() and len(f) == 8):
+                if(int(f[:-4]) > maxSvg):
+                    maxSvg = int(f[:-4])
+
+        with open(os.path.join(save_dir , str(maxSvg + 1).zfill(4) + ".svg")  , "w") as f:
+            f.write("".join(svg))
+
+    def denoise(self , background_color = 255.0):
+        
+        # removing background
+
+        gray = cv2.cvtColor(self.__current_frame , cv2.COLOR_BGR2GRAY).astype(numpy.float32)
+        blured_gray = cv2.filter2D(gray , -1 , self.__blur_kernel)
+        gray_scaled = gray - blured_gray
+        stdv = numpy.sqrt(numpy.mean((gray_scaled * gray_scaled).flatten()))
+        
+        # forground pixels
+        
+        forgroundList = numpy.argwhere((numpy.abs(gray_scaled) > BACKGROUND_THRESHOLD * stdv))
+        forgroundX = self.__current_frame[forgroundList[: , 0] , forgroundList[: , 1] , :]
+
+        # finding clusters
+
+        km = MiniBatchKMeans(n_clusters = CLUSTER_NUMBER).fit(forgroundX)
+
+        # replacing color with cluster color
+
+        newForgroundX = km.cluster_centers_[km.labels_]
+
+        # creating new image 
+
+        newX = background_color * numpy.ones(
+                self.__current_frame.shape , 
+                dtype = numpy.float32)
+        newX[forgroundList[: , 0] , forgroundList[: , 1] , :] = newForgroundX
+
+        return newX
+
+#    def nextCamera(self):
+#        # TODO
+#        pass
+
+    def finalize(self):
+        if(self.__initialized):
+            self.__capture.release()
+            cv2.destroyAllWindows()
+            
+        self.__initialized = False
+
+if(__name__ == "__main__"):
+
+    parser = argparse.ArgumentParser(description = """
+    Use web cam as blackboard.
+
+    Keyboard shortcuts:
+
+    q - quit;
+    s - save frame to svg file;
+    a = regular video / smoothed, averaged video;
+    p - pause image / unpause image;
+    w - display camera picture directly / warp image to ARUCO markers;
+    i - display regular colors / invert colors;
+""")
+    parser.add_argument("camera" , help = "Camera number for opencv.")
+    parser.add_argument("hres" , help = "Horizontal resolution of camera.")
+    parser.add_argument("vres" , help = "Vertical resolution of camera.")
+    parser.add_argument("--save" , "-s" , help = "Path to directory where frames will be stored. By default this is the current directory.")
+    args = parser.parse_args()
+
+    if(args.save is not None):
+        FRAME_SAVE_DIRECTORY = args.save
+    else:
+        FRAME_SAVE_DIRECTORY = os.getcwd()
+
+    camera = SimpleCamera(int(args.camera) , int(args.hres) , int(args.vres))
+
+    warp = False
+    pause = False
+    invert = False
+    average = False
+    denoise = False
+    background = 255.0
+    while(True):
+        camera.getFrame(
+                pause = pause , 
+                warp = warp , 
+                invert = invert , 
+                average = average , 
+                denoise = denoise , 
+                background = background)
+        key = cv2.waitKey(1)
+        if(key == ord('q')):
+            camera.finalize()
+            break
+        elif(key == ord('p')):
+            pause = not pause
+        elif(key == ord('w')):
+            warp = not warp
+        elif(key == ord('i')):
+            invert = not invert
+        elif(key == ord('a')):
+            average = not average 
+        elif(key == ord('s')):
+            camera.save()
+        elif(key == ord('d')):
+            denoise = not denoise
+        elif(key == ord('b')):
+            if background > 100:
+                background = 0.0
+            else:
+                background = 255.0
+        elif(key == ord('+')):
+            # operations performed once:
+            BACKGROUND_THRESHOLD += 0.1
+        elif(key == ord('-')):
+            # operations performed once:
+            BACKGROUND_THRESHOLD -= 0.1
+            if(BACKGROUND_THRESHOLD < 0.2):
+                BACKGROUND_THRESHOLD = 0.2

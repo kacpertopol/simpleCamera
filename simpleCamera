@@ -11,8 +11,9 @@ import matplotlib.pyplot as plt
 BLUR_KERNEL_SIZE = 300
 BACKGROUND_THRESHOLD = 2.0
 CLUSTER_NUMBER = 16
-CLUSTER_LENGTH_THRESHOLD = 5
+CLUSTER_LENGTH_THRESHOLD = 0
 FRAME_SAVE_DIRECTORY = None
+SIZE_EROSION = 2
 
 class SimpleCamera:
     """
@@ -74,7 +75,8 @@ class SimpleCamera:
             invert = False , 
             average = True , 
             denoise = False ,
-            background = 255.0):
+            background = 255.0 ,
+            erode = False):
         """
         TODO
         """
@@ -154,12 +156,16 @@ class SimpleCamera:
                         self.__current_perspective_matrix += mm
                     self.__current_perspective_matrix /= float(len(self.__perspective_buff))
 
+            if(erode and SIZE_EROSION > 0):
+                self.__current_frame = cv2.erode(self.__current_frame , numpy.ones((SIZE_EROSION , SIZE_EROSION) , numpy.uint8))
             if(invert):
                 self.__current_frame = 255 - self.__current_frame
             if(warp and self.__current_perspective_matrix is not None):
                 self.__current_frame = cv2.warpPerspective(self.__current_frame , self.__current_perspective_matrix , (frame.shape[1] , frame.shape[0]) , flags=cv2.INTER_CUBIC)
-            if(denoise):
+            if(denoise == "denoise"):
                 self.__current_frame = self.denoise(background_color = background)
+            elif(denoise == "save"):
+                self.__current_frame = self.save(background_color = background)
         cv2.imshow("SimpleCamera" , self.__current_frame.astype(numpy.uint8))
 
     def save(self , background_color = 255.0):
@@ -225,7 +231,21 @@ class SimpleCamera:
                     maxSvg = int(f[:-4])
 
         with open(os.path.join(save_dir , str(maxSvg + 1).zfill(4) + ".svg")  , "w") as f:
+            print("Writting svg to :" , os.path.join(save_dir , str(maxSvg + 1).zfill(4) + ".svg")  , "w")
             f.write("".join(svg))
+
+        # replacing color with cluster color
+
+        newForgroundX = km.cluster_centers_[km.labels_]
+
+        # creating new image 
+
+        newX = background_color * numpy.ones(
+                self.__current_frame.shape , 
+                dtype = numpy.float32)
+        newX[forgroundList[: , 0] , forgroundList[: , 1] , :] = newForgroundX
+
+        return newX
 
     def denoise(self , background_color = 255.0):
         
@@ -278,10 +298,14 @@ if(__name__ == "__main__"):
 
     q - quit;
     s - save frame to svg file;
+    d - denoise / regular video;
     a = regular video / smoothed, averaged video;
     p - pause image / unpause image;
     w - display camera picture directly / warp image to ARUCO markers;
     i - display regular colors / invert colors;
+    e - erode / regular video;
+    + - increase background threshold;
+    - - decrease background threshold;
 """)
     parser.add_argument("camera" , help = "Camera number for opencv.")
     parser.add_argument("hres" , help = "Horizontal resolution of camera.")
@@ -300,8 +324,9 @@ if(__name__ == "__main__"):
     pause = False
     invert = False
     average = False
-    denoise = False
+    denoise = "False" 
     background = 255.0
+    erode = False
     while(True):
         camera.getFrame(
                 pause = pause , 
@@ -309,7 +334,12 @@ if(__name__ == "__main__"):
                 invert = invert , 
                 average = average , 
                 denoise = denoise , 
-                background = background)
+                background = background , 
+                erode = erode)
+
+        if(denoise == "save"):
+            denoise = "denoise"
+
         key = cv2.waitKey(1)
         if(key == ord('q')):
             camera.finalize()
@@ -323,9 +353,21 @@ if(__name__ == "__main__"):
         elif(key == ord('a')):
             average = not average 
         elif(key == ord('s')):
-            camera.save()
+            if(denoise == "False"):
+                denoise = "save"
+            elif(denoise == "denoise"):
+                denoise = "save"
+            elif(denoise == "save"):
+                denoise = "False"
         elif(key == ord('d')):
-            denoise = not denoise
+            if(denoise == "False"):
+                denoise = "denoise"
+            elif(denoise == "denoise"):
+                denoise = "False"
+            elif(denoise == "save"):
+                denoise = "denoise"
+        elif(key == ord('e')):
+            erode = not erode 
         elif(key == ord('b')):
             if background > 100:
                 background = 0.0

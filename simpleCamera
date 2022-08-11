@@ -230,7 +230,7 @@ class SimpleCamera:
                 if(int(f[:-4]) > maxSvg):
                     maxSvg = int(f[:-4])
 
-        with open(os.path.join(save_dir , str(maxSvg + 1).zfill(4) + "00.svg")  , "w") as f:
+        with open(os.path.join(save_dir , str(maxSvg + 1).zfill(4) + "000.svg")  , "w") as f:
             f.write("".join(svg))
 
         # replacing color with cluster color

@@ -171,7 +171,10 @@ class SimpleCamera:
                         self.__current_frame = 255 - self.__current_frame
                     self.__current_frame = self.save(background_color = background)
                 else:
-                    self.__current_frame = self.save()
+                    self.save()
+                    if(invert):
+                        self.__current_frame = 255 - self.__current_frame
+                    self.__current_frame = self.denoise(background_color = background)
 
         cv2.imshow("SimpleCamera" , self.__current_frame.astype(numpy.uint8))
 

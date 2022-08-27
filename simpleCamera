@@ -76,7 +76,8 @@ class SimpleCamera:
             average = True , 
             denoise = False ,
             background = (255.0 , 255.0 , 255.0) ,
-            erode = False):
+            erode = False ,
+            printable = False):
         """
         TODO
         """
@@ -158,14 +159,20 @@ class SimpleCamera:
 
             if(erode and SIZE_EROSION > 0):
                 self.__current_frame = cv2.erode(self.__current_frame , numpy.ones((SIZE_EROSION , SIZE_EROSION) , numpy.uint8))
-            if(invert):
-                self.__current_frame = 255 - self.__current_frame
             if(warp and self.__current_perspective_matrix is not None):
                 self.__current_frame = cv2.warpPerspective(self.__current_frame , self.__current_perspective_matrix , (frame.shape[1] , frame.shape[0]) , flags=cv2.INTER_CUBIC)
             if(denoise == "denoise"):
+                if(invert):
+                    self.__current_frame = 255 - self.__current_frame
                 self.__current_frame = self.denoise(background_color = background)
             elif(denoise == "save"):
-                self.__current_frame = self.save(background_color = background)
+                if(not printable):
+                    if(invert):
+                        self.__current_frame = 255 - self.__current_frame
+                    self.__current_frame = self.save(background_color = background)
+                else:
+                    self.__current_frame = self.save()
+
         cv2.imshow("SimpleCamera" , self.__current_frame.astype(numpy.uint8))
 
     def save(self , background_color = (255.0 , 255.0 , 255.0)):
@@ -392,6 +399,7 @@ if(__name__ == "__main__"):
     parser.add_argument("hres" , help = "Horizontal resolution of camera.")
     parser.add_argument("vres" , help = "Vertical resolution of camera.")
     parser.add_argument("--save" , "-s" , help = "Path to directory where frames will be stored. By default this is the current directory.")
+    parser.add_argument("--printable" , "-p" , action = "store_true" , help = "The stored frames might look different then the displayed image. The background will be white, for printing.")
     args = parser.parse_args()
 
     if(args.save is not None):
@@ -416,7 +424,8 @@ if(__name__ == "__main__"):
                 average = average , 
                 denoise = denoise , 
                 background = background , 
-                erode = erode)
+                erode = erode , 
+                printable = args.printable)
 
         if(denoise == "save"):
             denoise = "denoise"

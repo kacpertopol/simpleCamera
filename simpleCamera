@@ -8,9 +8,9 @@ from sklearn.cluster import MiniBatchKMeans , AffinityPropagation
 import matplotlib.pyplot as plt
 
 # TODO, move this to object
-BLUR_KERNEL_SIZE = 300
+BLUR_KERNEL_SIZE = 200
 BACKGROUND_THRESHOLD = 2.0
-CLUSTER_NUMBER = 16
+CLUSTER_NUMBER = 8
 CLUSTER_LENGTH_THRESHOLD = 0
 FRAME_SAVE_DIRECTORY = None
 SIZE_EROSION = 2
@@ -75,7 +75,7 @@ class SimpleCamera:
             invert = False , 
             average = True , 
             denoise = False ,
-            background = 255.0 ,
+            background = (255.0 , 255.0 , 255.0) ,
             erode = False):
         """
         TODO
@@ -168,7 +168,7 @@ class SimpleCamera:
                 self.__current_frame = self.save(background_color = background)
         cv2.imshow("SimpleCamera" , self.__current_frame.astype(numpy.uint8))
 
-    def save(self , background_color = 255.0):
+    def save(self , background_color = (255.0 , 255.0 , 255.0)):
 
         # removing background
 
@@ -192,7 +192,7 @@ class SimpleCamera:
         svg += ["<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"" + str(gray.shape[1]) + "\" height=\"" + str(gray.shape[0]) + 
                 "\"" + ">\n"]
         svg += ['<rect width="100%" height="100%" fill="rgb(' + 
-                    str(int(background_color)) + "," + str(int(background_color)) + "," + str(int(background_color)) + 
+                    str(int(background_color[0])) + "," + str(int(background_color[1])) + "," + str(int(background_color[2])) + 
                 ')"/>\n']
 
         for c in range(CLUSTER_NUMBER):
@@ -208,16 +208,72 @@ class SimpleCamera:
             if(contours is not None):
                 for el in contours:
                     if(el.shape[0] >= CLUSTER_LENGTH_THRESHOLD):
-                        svg += ["<polyline points=\""]
+                        
+                        svg += ["<path d=\""]
+                        
+                        first = True
+                        second = False
+
+                        firstOK = False
+                        xfirst , yfirst = None , None
+                        secondOK = False
+                        xsecond , ysecond = None , None
+                        lastOK = False
+                        xlast , ylast = None , None
                         for pt in range(el.shape[0]):
-                            xind , yind = el[pt][0][0] , el[pt][0][1] 
-                            if xind >= 0 and yind >=0 :
-                                svg += [str(xind) + "," + str(yind) + " "]
-                        svg += ["\" fill=\"rgb(" + 
+                           
+                            xc , yc = None , None
+                            cOK = False
+                            xp , yp = None , None
+                            pOK = False
+                            xn , yn = None , None
+                            nOK = False
+
+                            xc , yc = el[pt][0][0] , el[pt][0][1] 
+                            cOK = not (xc < 0 or yc < 0)
+
+                            if pt - 1 >= 0:
+                                xp , yp = el[pt - 1][0][0] , el[pt - 1][0][1] 
+                                pOK = not (xp < 0 or yp < 0)
+
+                            if pt + 1 < el.shape[0]:
+                                xn , yn = el[pt + 1][0][0] , el[pt + 1][0][1] 
+                                nOK = not (xn < 0 or yn < 0)
+                           
+                            if first:
+                                if cOK:
+                                    svg += ["M " + str(xc) + "," + str(yc) + " "]
+                                    xfirst , yfirst = xc , yc
+                                    firstOK = True
+                                    first = False
+                                    second = True
+                            else:
+                                if second:
+                                    if cOK:
+                                        xsecond , ysecond = xc , yc
+                                        secondOK = True
+                                        first = False
+                                        second = False
+                                if cOK:
+                                    xlast , ylast = xc , yc
+                                    lastOK = True
+
+                                    if nOK:
+                                        xcn , ycn = xc - 0.5 * (xn - xc) , yc - 0.5 * (yn - yc)
+                                        svg += [" Q " + str(xcn) + "," + str(ycn) + " " + str(xc) + "," + str(yc)]
+                                    else:
+                                        svg += [" L " + str(xc) + "," + str(yc) + " "]
+
+                        if(firstOK and secondOK):
+                            xcn , ycn = xfirst - 0.5 * (xsecond - xfirst) , yfirst - 0.5 * (ysecond - yfirst)
+                            svg += [" Q " + str(xcn) + "," + str(ycn) + " " + str(xfirst) + "," + str(yfirst)]
+                        
+                        svg += [" Z\" fill=\"rgb(" + 
                                     str(int(color[2])) + "," + str(int(color[1])) + "," + str(int(color[0])) + 
                                 ")\" stroke-width=\"2\" stroke=\"rgb(" + 
                                     str(int(color[2])) + "," + str(int(color[1])) + "," + str(int(color[0])) + 
                                 ")\"/>\n"]
+
 
         svg += ["</svg>\n"]
 
@@ -226,9 +282,9 @@ class SimpleCamera:
         save_dir = FRAME_SAVE_DIRECTORY
         maxSvg = 0
         for f in os.listdir(save_dir):
-            if(f[-4:] == ".svg" and f[:-4].isdigit() and len(f) == 8):
-                if(int(f[:-4]) > maxSvg):
-                    maxSvg = int(f[:-4])
+            if(f[-4:] == ".svg"):
+                if(int(f[:-7]) > maxSvg):
+                    maxSvg = int(f[:-7])
 
         with open(os.path.join(save_dir , str(maxSvg + 1).zfill(4) + "000.svg")  , "w") as f:
             f.write("".join(svg))
@@ -239,14 +295,18 @@ class SimpleCamera:
 
         # creating new image 
 
-        newX = background_color * numpy.ones(
+        newX = numpy.zeros(
                 self.__current_frame.shape , 
                 dtype = numpy.float32)
+        newX[: , : , 0] = background_color[0]
+        newX[: , : , 1] = background_color[1]
+        newX[: , : , 2] = background_color[2]
+
         newX[forgroundList[: , 0] , forgroundList[: , 1] , :] = newForgroundX
 
         return newX
 
-    def denoise(self , background_color = 255.0):
+    def denoise(self , background_color = (255.0 , 255.0 , 255.0)):
         
         # removing background
 
@@ -270,16 +330,37 @@ class SimpleCamera:
 
         # creating new image 
 
-        newX = background_color * numpy.ones(
+        newX = numpy.zeros(
                 self.__current_frame.shape , 
                 dtype = numpy.float32)
+        newX[: , : , 0] = background_color[0]
+        newX[: , : , 1] = background_color[1]
+        newX[: , : , 2] = background_color[2]
+        
         newX[forgroundList[: , 0] , forgroundList[: , 1] , :] = newForgroundX
 
         return newX
 
-#    def nextCamera(self):
-#        # TODO
-#        pass
+    def removebackground(self , background_color = (255.0 , 255.0 , 255.0)):
+        
+        # removing background
+
+        gray = cv2.cvtColor(self.__current_frame , cv2.COLOR_BGR2GRAY).astype(numpy.float32)
+        blured_gray = cv2.filter2D(gray , -1 , self.__blur_kernel)
+        gray_scaled = gray - blured_gray
+        stdv = numpy.sqrt(numpy.mean((gray_scaled * gray_scaled).flatten()))
+        
+        # background pixels
+        
+        backgroundList = numpy.argwhere((numpy.abs(gray_scaled) < BACKGROUND_THRESHOLD * stdv))
+        #backgroundX = self.__current_frame[backgroundList[: , 0] , backgroundList[: , 1] , :]
+
+        newX = self.__current_frame.copy()
+        newX[backgroundList[: , 0] , backgroundList[: , 1] , 0] = background_color[0]
+        newX[backgroundList[: , 0] , backgroundList[: , 1] , 1] = background_color[1]
+        newX[backgroundList[: , 0] , backgroundList[: , 1] , 2] = background_color[2]
+
+        return newX
 
     def finalize(self):
         if(self.__initialized):
@@ -298,10 +379,11 @@ if(__name__ == "__main__"):
     q - quit;
     s - save frame to svg file;
     d - denoise / regular video;
-    a = regular video / smoothed, averaged video;
+    a - regular video / smoothed, averaged video;
     p - pause image / unpause image;
     w - display camera picture directly / warp image to ARUCO markers;
     i - display regular colors / invert colors;
+    b - use black background / white background;
     e - erode / regular video;
     + - increase background threshold;
     - - decrease background threshold;
@@ -324,7 +406,7 @@ if(__name__ == "__main__"):
     invert = False
     average = False
     denoise = "False" 
-    background = 255.0
+    background = (255.0 , 255.0 , 255.0)
     erode = False
     while(True):
         camera.getFrame(
@@ -368,10 +450,12 @@ if(__name__ == "__main__"):
         elif(key == ord('e')):
             erode = not erode 
         elif(key == ord('b')):
-            if background > 100:
-                background = 0.0
+            if background == (255.0 , 255.0 , 255.0):
+                background = (0.0 , 0.0 , 0.0)
+            elif background == (0.0 , 0.0 , 0.0):
+                background = (13.0 , 55.0 , 13.0)
             else:
-                background = 255.0
+                background = (255.0 , 255.0 , 255.0)
         elif(key == ord('+')):
             # operations performed once:
             BACKGROUND_THRESHOLD += 0.1

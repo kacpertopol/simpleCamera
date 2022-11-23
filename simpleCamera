@@ -21,7 +21,9 @@ class SimpleCamera:
     """
     def __init__(
             self , number , hres , vres , 
-            buffer_size = 10):
+            buffer_size = 5,
+            disturbanceThreshold = 0.0001,
+            verbose = False):
         """
         TODO
         """
@@ -32,7 +34,7 @@ class SimpleCamera:
         self.__script_path = os.path.dirname(os.path.realpath(__file__))
 
         # image with help information
-        self.__infoImage = cv2.imread(os.path.join(self.__script_path , "info.png"))
+        #self.__infoImage = cv2.imread(os.path.join(self.__script_path , "info.png"))
 
         # buffer size for frames and perspective matrices
         self.__buffer_size = buffer_size
@@ -69,6 +71,17 @@ class SimpleCamera:
 
         self.__initialized = True
 
+        # is there a disturbance in the frame
+
+        self.__disturbanceThreshold = disturbanceThreshold
+        self.__forgroundFraction = 0
+        self.__previousForgroundFraction = 0
+        self.__pause = False
+
+        # verbose
+
+        self.__verbose = verbose
+
     def getFrame(self , 
             warp = True , 
             pause = False , 
@@ -88,22 +101,49 @@ class SimpleCamera:
         if(ret):
 
             # got image from webcam
-            
+
             ## append to frame buffer
 
-            self.__frame_buff.append(frame.astype(numpy.float32))
-            if(len(self.__frame_buff) > self.__buffer_size):
-                self.__frame_buff.pop(0)
+            if(not (self.__pause and (denoise == "denoise" or denoise == "save"))):
+                if(self.__verbose):
+                    print("          adding to buffer")
+                self.__frame_buff.append(frame.astype(numpy.float32))
+                if(len(self.__frame_buff) > self.__buffer_size):
+                    self.__frame_buff.pop(0)
+            else:
+                if(self.__verbose):
+                    print("          unchanged buffer")
+                    cf = numpy.zeros(frame.shape , numpy.float32)
+                    for f in self.__frame_buff:
+                        cf += f
+                    cf /= float(len(self.__frame_buff))
+                    print("b mean =" , numpy.mean(cf))
 
             ## calculate average frame for smoothing
 
-            if(average):
-                self.__current_frame = numpy.zeros(frame.shape , numpy.float32)
-                for f in self.__frame_buff:
-                    self.__current_frame += f
-                self.__current_frame /= float(len(self.__frame_buff))
+            if(not (self.__pause and (denoise == "denoise" or denoise == "save"))):
+                if(average):
+                    if(self.__verbose):
+                        print("                          calculating average")
+                    self.__current_frame = numpy.zeros(frame.shape , numpy.float32)
+                    for f in self.__frame_buff:
+                        self.__current_frame += f
+                    self.__current_frame /= float(len(self.__frame_buff))
+                    if(self.__verbose):
+                        print("b mean =" , numpy.mean(self.__current_frame))
+                else:
+                    if(len(self.__frame_buff) > 0):
+                        if(self.__verbose):
+                            print("                          using last frame b1")
+                        self.__current_frame = self.__frame_buff[-1]
+                    else:
+                        if(self.__verbose):
+                            print("                          buffer empty usingf")
+                        self.__current_frame = frame.astype(numpy.float32)
             else:
-                self.__current_frame = self.__frame_buff[-1]
+                if(self.__verbose):
+                    print("                          using frame from cm")
+                self.__current_frame = frame.astype(numpy.float32)
 
             if(warp):
 
@@ -176,7 +216,8 @@ class SimpleCamera:
                         self.__current_frame = 255 - self.__current_frame
                     self.__current_frame = self.denoise(background_color = background)
 
-        cv2.imshow("SimpleCamera" , self.__current_frame.astype(numpy.uint8))
+        if(not (self.__pause and (denoise == "denoise" or denoise == "save"))):
+            cv2.imshow("SimpleCamera" , self.__current_frame.astype(numpy.uint8))
 
     def save(self , background_color = (255.0 , 255.0 , 255.0)):
 
@@ -328,6 +369,16 @@ class SimpleCamera:
         # forground pixels
         
         forgroundList = numpy.argwhere((numpy.abs(gray_scaled) > BACKGROUND_THRESHOLD * stdv))
+        
+        self.__previousForgroundFraction = self.__forgroundFraction 
+        self.__forgroundFraction = float(forgroundList.shape[0]) / float(self.__current_frame.shape[0] * self.__current_frame.shape[1])
+        if(abs(self.__forgroundFraction - self.__previousForgroundFraction) > self.__disturbanceThreshold):
+            if(self.__verbose):
+                print("                                             change , threshold = " , abs(self.__forgroundFraction - self.__previousForgroundFraction) , "," , self.__disturbanceThreshold)
+            self.__pause = True
+        else:
+            self.__pause = False
+        
         forgroundX = self.__current_frame[forgroundList[: , 0] , forgroundList[: , 1] , :]
 
         # finding clusters
@@ -403,6 +454,8 @@ if(__name__ == "__main__"):
     parser.add_argument("vres" , help = "Vertical resolution of camera.")
     parser.add_argument("--save" , "-s" , help = "Path to directory where frames will be stored. By default this is the current directory.")
     parser.add_argument("--printable" , "-p" , action = "store_true" , help = "The stored frames might look different then the displayed image. The background will be white, for printing.")
+    parser.add_argument("--disturbance" , "-d" , help = "Disturbance threshold, by default disturbances are not removed. A good value to avoid frame disturbances is 0.00002.")
+    parser.add_argument("--verbose" , "-v" , action = "store_true" , help = "Verbose output")
     args = parser.parse_args()
 
     if(args.save is not None):
@@ -410,7 +463,11 @@ if(__name__ == "__main__"):
     else:
         FRAME_SAVE_DIRECTORY = os.getcwd()
 
-    camera = SimpleCamera(int(args.camera) , int(args.hres) , int(args.vres))
+    camera = None
+    if args.disturbance is not None:
+        camera = SimpleCamera(int(args.camera) , int(args.hres) , int(args.vres) , disturbanceThreshold = float(args.disturbance) , verbose = args.verbose)
+    else:
+        camera = SimpleCamera(int(args.camera) , int(args.hres) , int(args.vres) , disturbanceThreshold = 100.0 , verbose = args.verbose)
 
     warp = False
     pause = False

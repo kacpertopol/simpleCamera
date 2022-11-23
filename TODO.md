@@ -1,0 +1,3 @@
+- smooth transition after disturbance removed 
+- remove command line options and instead use global constants
+  - adjustable values from keyboard shortcuts
